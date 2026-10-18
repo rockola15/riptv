@@ -29,6 +29,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -36,6 +37,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -43,11 +45,10 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 
-private const val SEEK_MS = 10_000L
-
 /**
- * Reproductor de películas y episodios. Mando: OK pausa o reanuda, izquierda/derecha retroceden o adelantan
- * 10 segundos, arriba/abajo 1 minuto y Atrás vuelve a la lista.
+ * Reproductor de películas y episodios. Mando: OK pausa o reanuda y muestra la barra inferior, izquierda/derecha
+ * también la muestran y mueven el foco entre sus botones (retroceso y avance de 10 s, rápido si se mantiene
+ * pulsado), arriba/abajo saltan 1 minuto y Atrás vuelve a la lista.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -62,19 +63,28 @@ internal fun VodPlayerScreen(vm: MainViewModel) {
     var overlay by remember { mutableStateOf(true) }
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var panelOpen by remember { mutableStateOf(false) }
+    var tracks by remember { mutableStateOf(player.currentTracks) }
     val focus = remember { FocusRequester() }
+    val playFocus = remember { FocusRequester() }
 
     BackHandler { vm.playingVod = null }
+    BackHandler(enabled = panelOpen) { panelOpen = false }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onTracksChanged(t: Tracks) { tracks = t }
+
+
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) failed = null
             }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                paused = !isPlaying && player.playbackState == Player.STATE_READY
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                paused = !playing && player.playbackState == Player.STATE_READY
             }
 
             override fun onPlayerError(error: PlaybackException) { failed = error.errorCodeName }
@@ -90,14 +100,18 @@ internal fun VodPlayerScreen(vm: MainViewModel) {
         player.setMediaItem(MediaItem.fromUri(item.url))
         player.prepare()
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
-    // La barra se oculta sola a los segundos, salvo en pausa, y reaparece al pulsar cualquier tecla.
-    LaunchedEffect(interaction, paused) {
+    // La barra se oculta sola a los segundos, salvo en pausa o con el panel de audio abierto, y reaparece al pulsar una tecla.
+    LaunchedEffect(interaction, paused, panelOpen) {
         overlay = true
-        if (!paused) {
-            delay(5_000)
+        if (!paused && !panelOpen) {
+            delay(3_000)
             overlay = false
         }
+    }
+    // El foco va a la barra mientras se ve y vuelve a la pantalla al ocultarse (o al cerrar el panel).
+    LaunchedEffect(overlay, panelOpen) {
+        if (panelOpen) return@LaunchedEffect
+        runCatching { if (overlay) playFocus.requestFocus() else focus.requestFocus() }
     }
     LaunchedEffect(overlay) {
         while (overlay) {
@@ -113,25 +127,29 @@ internal fun VodPlayerScreen(vm: MainViewModel) {
         position = player.currentPosition
     }
 
+    fun togglePlayback() {
+        when {
+            failed != null -> { failed = null; player.prepare() }
+            player.isPlaying -> player.pause()
+            else -> player.play()
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
             .focusRequester(focus)
             .focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown) interaction++
+                false
+            }
             .onKeyEvent { e ->
-                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
-                interaction++
+                if (e.type != KeyEventType.KeyDown || panelOpen) return@onKeyEvent false
                 when (e.key) {
-                    Key.DirectionCenter, Key.Enter -> {
-                        when {
-                            failed != null -> { failed = null; player.prepare() }
-                            player.isPlaying -> player.pause()
-                            else -> player.play()
-                        }
-                        true
-                    }
-                    Key.DirectionLeft -> { seek(-SEEK_MS); true }
-                    Key.DirectionRight -> { seek(SEEK_MS); true }
+                    Key.DirectionCenter, Key.Enter -> { togglePlayback(); true }
+                    // Con la barra visible, izquierda/derecha mueven el foco entre sus botones.
+                    Key.DirectionLeft, Key.DirectionRight, Key.Menu -> !overlay
                     Key.DirectionUp -> { seek(60_000); true }
                     Key.DirectionDown -> { seek(-60_000); true }
                     else -> false
@@ -149,22 +167,35 @@ internal fun VodPlayerScreen(vm: MainViewModel) {
                 }
             },
         )
-        if (overlay) {
-            Column(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xCC000000)).padding(horizontal = 48.dp, vertical = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(item.title, style = MaterialTheme.typography.titleLarge, maxLines = 1)
-                val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-                Box(Modifier.fillMaxWidth().height(6.dp).background(Color(0xFF33333D))) {
-                    Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(Color.White))
+        if (overlay && !panelOpen) {
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                Column(
+                    Modifier.fillMaxWidth().background(Color(0xCC000000)).padding(start = 48.dp, end = 48.dp, top = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(item.title, style = MaterialTheme.typography.titleLarge, maxLines = 1)
+                    val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                    Box(Modifier.fillMaxWidth().height(6.dp).background(Color(0xFF33333D))) {
+                        Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(Color.White))
+                    }
+                    Text(
+                        "${formatDuration(position)} / ${formatDuration(duration)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFBBBBBB),
+                    )
                 }
-                Text(
-                    "${formatDuration(position)} / ${formatDuration(duration)}   ·   ◀ ▶ 10 s   ▲ ▼ 1 min   OK pausa",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFFBBBBBB),
+                PlayerControls(
+                    isPlaying = isPlaying,
+                    onPlayPause = { togglePlayback() },
+                    onAudio = { panelOpen = true },
+                    playFocus = playFocus,
+                    onAspect = { cycleAspect(vm, context) },
+                    seekBy = { seek(it) },
                 )
             }
+        }
+        if (panelOpen) {
+            TracksPanel(player, tracks, vm, Modifier.align(Alignment.CenterEnd))
         }
         val status = when {
             failed != null -> "No se puede reproducir ($failed). Pulsa OK para reintentar."

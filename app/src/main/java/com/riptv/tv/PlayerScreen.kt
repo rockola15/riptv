@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -32,6 +33,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -101,7 +103,8 @@ internal fun createPlayer(context: Context, settings: AppPrefs): ExoPlayer {
 
 /**
  * Reproductor a pantalla completa. Mando: arriba/abajo cambian de canal, los números saltan a un
- * canal, OK pausa o reanuda, izquierda abre el panel de audio, subtítulos y favoritos.
+ * canal, OK pausa o reanuda y muestra la barra inferior; izquierda/derecha también la muestran y, una vez
+ * visible, mueven el foco entre sus botones.
  */
 @OptIn(ExperimentalTvMaterial3Api::class, UnstableApi::class)
 @Composable
@@ -119,9 +122,14 @@ internal fun PlayerScreen(vm: MainViewModel) {
     var programs by remember(channel) { mutableStateOf<List<Program>>(emptyList()) }
     var interaction by remember { mutableIntStateOf(0) }
     var bannerVisible by remember { mutableStateOf(true) }
+    var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var controlsVisible by remember { mutableStateOf(false) }
+    var controlsTick by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
+    val playFocus = remember { FocusRequester() }
 
     BackHandler { vm.playing = null }
+    BackHandler(enabled = controlsVisible && !panelOpen && !showSchedule) { controlsVisible = false }
     BackHandler(enabled = panelOpen) { panelOpen = false }
 
     DisposableEffect(player) {
@@ -132,6 +140,8 @@ internal fun PlayerScreen(vm: MainViewModel) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) attempt = 0
             }
+
+            override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
 
             override fun onPlayerError(error: PlaybackException) { attempt++ }
         }
@@ -182,7 +192,7 @@ internal fun PlayerScreen(vm: MainViewModel) {
     // El cartel con el canal se oculta solo a los segundos y reaparece al pulsar cualquier tecla.
     LaunchedEffect(channel, interaction) {
         bannerVisible = true
-        delay(6_000)
+        delay(3_000)
         bannerVisible = false
     }
     // Número de canal tecleado: salta a él cuando se deja de pulsar o con OK.
@@ -196,13 +206,28 @@ internal fun PlayerScreen(vm: MainViewModel) {
             goToTypedNumber()
         }
     }
-    LaunchedEffect(panelOpen) { if (!panelOpen) focus.requestFocus() }
+    // La barra se oculta sola a los segundos sin pulsar nada (no mientras hay un panel o la programación abiertos).
+    LaunchedEffect(controlsVisible, controlsTick, panelOpen, showSchedule) {
+        if (controlsVisible && !panelOpen && !showSchedule) {
+            delay(3_000)
+            controlsVisible = false
+        }
+    }
+    // El foco va a la barra mientras se ve y vuelve a la pantalla al ocultarse (o al cerrar un panel).
+    LaunchedEffect(controlsVisible, panelOpen, showSchedule) {
+        if (panelOpen || showSchedule) return@LaunchedEffect
+        runCatching { if (controlsVisible) playFocus.requestFocus() else focus.requestFocus() }
+    }
 
     Box(
         Modifier
             .fillMaxSize()
             .focusRequester(focus)
             .focusable()
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown) controlsTick++
+                false
+            }
             .onKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown || panelOpen) return@onKeyEvent false
                 interaction++
@@ -216,10 +241,17 @@ internal fun PlayerScreen(vm: MainViewModel) {
                     digit != null -> { digits = (digits + digit).takeLast(4); true }
                     e.key == Key.DirectionUp || e.key == Key.ChannelUp -> { vm.zap(-1); true }
                     e.key == Key.DirectionDown || e.key == Key.ChannelDown -> { vm.zap(1); true }
-                    e.key == Key.DirectionLeft || e.key == Key.Menu -> { panelOpen = true; true }
+                    // Con la barra visible, izquierda/derecha mueven el foco entre sus botones.
+                    (e.key == Key.DirectionLeft || e.key == Key.DirectionRight || e.key == Key.Menu) && !controlsVisible -> {
+                        controlsVisible = true
+                        true
+                    }
                     e.key == Key.DirectionCenter || e.key == Key.Enter -> {
                         if (digits.isNotEmpty()) goToTypedNumber()
-                        else if (player.isPlaying) player.pause() else player.play()
+                        else {
+                            if (player.isPlaying) player.pause() else player.play()
+                            controlsVisible = true
+                        }
                         true
                     }
                     else -> false
@@ -252,9 +284,30 @@ internal fun PlayerScreen(vm: MainViewModel) {
                 modifier = Modifier.align(Alignment.TopEnd).padding(24.dp).background(Color(0xCC000000)).padding(16.dp),
             )
         }
+        if (controlsVisible && !panelOpen) {
+            PlayerControls(
+                isPlaying = isPlaying,
+                onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                onAudio = { panelOpen = true },
+                playFocus = playFocus,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                onEpg = { showSchedule = true },
+                onAspect = { cycleAspect(vm, context) },
+                onPrev = { vm.zap(-1) },
+                onNext = { vm.zap(1) },
+                favorite = vm.isFavorite(channel),
+                onFavorite = { vm.toggleFavorite(channel) },
+                onHide = {
+                    // Si el canal oculto es el que suena, se pasa al siguiente (o se sale si no hay otro).
+                    vm.zap(1)
+                    if (vm.playing == channel) vm.playing = null
+                    vm.hide(channel)
+                },
+            )
+        }
         if (showSchedule) ScheduleDialog(vm, channel) { showSchedule = false }
         if (panelOpen) {
-            TracksPanel(player, tracks, vm, channel, { showSchedule = true }, Modifier.align(Alignment.CenterEnd))
+            TracksPanel(player, tracks, vm, Modifier.align(Alignment.CenterEnd))
         }
     }
 }
@@ -277,7 +330,6 @@ private fun Banner(channel: Channel, programs: List<Program>, modifier: Modifier
         programs.getOrNull(1)?.let {
             Text("Después: ${it.title} (${clock(it.startMs)})", style = MaterialTheme.typography.bodyMedium)
         }
-        Text("◀ Audio, subtítulos y favoritos", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFBBBBBB))
     }
 }
 
@@ -307,15 +359,13 @@ private fun trackOptions(player: ExoPlayer, tracks: Tracks, type: Int): List<Tra
     }
 }
 
-/** Panel lateral: favorito, pista de audio y subtítulos del canal que se está viendo. */
+/** Panel lateral: pista de audio y subtítulos de lo que se está viendo. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun TracksPanel(
+internal fun TracksPanel(
     player: ExoPlayer,
     tracks: Tracks,
     vm: MainViewModel,
-    channel: Channel,
-    onSchedule: () -> Unit,
     modifier: Modifier,
 ) {
     val audio = trackOptions(player, tracks, C.TRACK_TYPE_AUDIO)
@@ -325,28 +375,14 @@ private fun TracksPanel(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .build()
     }
-    val favorite = vm.isFavorite(channel)
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { first.requestFocus() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
 
     LazyColumn(
         modifier.width(460.dp).fillMaxHeight().background(Color(0xE6101014)).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        item {
-            PanelRow(
-                if (favorite) "★ Quitar de favoritos" else "☆ Añadir a favoritos", null,
-                Modifier.focusRequester(first),
-            ) { vm.toggleFavorite(channel) }
-        }
-        item { PanelRow("Ver programación", null) { onSchedule() } }
-        item {
-            val mode = vm.settings.aspectMode
-            PanelRow("Formato de imagen: ${aspectLabel(mode)}", null) {
-                vm.settings.aspectMode = AspectMode.entries[(mode.ordinal + 1) % AspectMode.entries.size]
-            }
-        }
-        item { Text("Audio", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp)) }
+        item { Text("Audio", style = MaterialTheme.typography.titleMedium) }
         if (audio.isEmpty()) {
             val unsupported = tracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }
             item {
@@ -357,9 +393,13 @@ private fun TracksPanel(
                 )
             }
         }
-        items(audio) { o -> PanelRow(o.label, o.selected) { o.onSelect() } }
+        itemsIndexed(audio) { i, o ->
+            PanelRow(o.label, o.selected, if (i == 0) Modifier.focusRequester(first) else Modifier) { o.onSelect() }
+        }
         item { Text("Subtítulos", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp)) }
-        item { PanelRow(noSubtitles.label, noSubtitles.selected) { noSubtitles.onSelect() } }
+        item {
+            PanelRow(noSubtitles.label, noSubtitles.selected, if (audio.isEmpty()) Modifier.focusRequester(first) else Modifier) { noSubtitles.onSelect() }
+        }
         items(subtitles) { o -> PanelRow(o.label, o.selected) { o.onSelect() } }
     }
 }

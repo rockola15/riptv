@@ -3,7 +3,7 @@
 Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para usarse con el mando a distancia. Interfaz en español, hecha con Jetpack Compose para TV y reproducción con Media3 (ExoPlayer).
 
 - **Paquete:** `com.riptv.tv`
-- **Versión:** 1.0.0 (`versionCode` 3)
+- **Versión:** 1.1.0 (`versionCode` 4)
 - **Android:** minSdk 23, targetSdk 35
 - **Requisitos del dispositivo:** Leanback (Android TV); no necesita pantalla táctil
 
@@ -24,7 +24,7 @@ Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para u
 - El catálogo se pide a la API del servidor (`player_api.php`), deduciendo servidor, usuario y contraseña de la URL de un canal. Si el servidor no ofrece catálogo, la pestaña lo avisa.
 - Categorías a la izquierda, carteles y búsqueda. Una película abre su ficha (sinopsis, reparto, dirección, valoración, duración y tráiler si lo hay); una serie abre su ficha con temporadas y episodios.
 - Ajustes → Avanzado → Información muestra la caducidad de la suscripción y las conexiones en uso; la pantalla de inicio avisa cuando caduca en menos de una semana.
-- Reproductor propio: OK pausa, izquierda/derecha ±10 s, arriba/abajo ±1 min.
+- Reproductor propio con la misma barra de iconos: OK muestra la barra; retroceso y avance de 10 s (rápido si se mantiene pulsado), audio y relación de aspecto; arriba/abajo ±1 min.
 
 ### Actualizaciones
 - En Ajustes → Avanzado → **Buscar actualizaciones**: consulta la última release de [GitHub](https://github.com/rockola15/riptv/releases), descarga el APK y abre el instalador del sistema. Solo funciona si el APK está firmado con la misma clave que la app instalada.
@@ -34,6 +34,7 @@ Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para u
 - Reconexión automática con indicador del intento.
 - Perfiles de colchón de vídeo (estabilidad de la reproducción), para aguantar microcortes.
 - Formato de imagen: ajustar, ampliar o estirar.
+- Barra de reproducción inferior solo con iconos (se oculta a los 3 s): programación (solo en directo), relación de aspecto, audio y subtítulos, canal anterior, play/pausa, canal siguiente, favorito y ocultar canal.
 - Panel de pistas de audio y subtítulos.
 - Cliente de red OkHttp y agente de usuario configurable.
 - Decodificación de audio por software para dispositivos que no la traen: MPEG-1 Layer II (el audio de la TDT) con JLayer, y AC-3, E-AC-3, DTS… con la extensión FFmpeg de Jellyfin.
@@ -56,8 +57,8 @@ Durante la reproducción:
 |---|---|
 | Arriba / Canal + | Canal anterior |
 | Abajo / Canal − | Canal siguiente |
-| Izquierda / Menú | Abre el panel de pistas, programación y opciones |
-| OK / Enter | Pausa o reanuda (si hay un número tecleado, va a ese canal) |
+| Izquierda / Derecha / Menú | Muestra la barra de reproducción (con ella visible, mueven el foco entre sus botones) |
+| OK / Enter | Pausa o reanuda y muestra la barra (si hay un número tecleado, va a ese canal) |
 | Dígitos 0–9 | Teclear el número de canal |
 
 ## Compilar
@@ -98,7 +99,8 @@ Todo el código está en `app/src/main/java/com/riptv/tv/`:
 |---|---|
 | `MainActivity.kt` | Pantalla principal: grupos, canales, búsqueda |
 | `MainViewModel.kt` | Estado de la app y lógica de listas, canales y zapping |
-| `PlayerScreen.kt` | Reproductor, banner, panel de pistas y teclas del mando |
+| `PlayerScreen.kt`, `VodPlayer.kt` | Reproductores (canales y películas/series), banner, panel de pistas y teclas del mando |
+| `PlayerControls.kt` | Barra de reproducción inferior con iconos |
 | `SettingsScreens.kt` | Menús de ajustes, PIN, listas, grupos y canales ocultos |
 | `PlaylistRepository.kt`, `M3uParser.kt`, `Channel.kt` | Descarga, caché y lectura de las listas M3U |
 | `Epg.kt`, `Schedule.kt` | Guía de programación |

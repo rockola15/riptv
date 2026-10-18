@@ -13,10 +13,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.tv.material3.Button
+import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.ListItem
 import androidx.tv.material3.LocalContentColor
@@ -100,7 +103,7 @@ private fun AppContent(vm: MainViewModel, onExit: () -> Unit) {
     var updateDialog by remember { mutableStateOf<Boolean?>(null) }
     var confirmExit by remember { mutableStateOf(false) }
     // Atrás en la pantalla principal pide confirmación, para no salir de la app sin querer.
-    BackHandler(enabled = vm.playing == null && !showSettings && updateDialog == null) { confirmExit = true }
+    BackHandler(enabled = vm.playing == null && vm.playingVod == null && !showSettings && updateDialog == null) { confirmExit = true }
     if (confirmExit) {
         ActionDialog(
             title = "¿Salir de la aplicación?",
@@ -119,6 +122,7 @@ private fun AppContent(vm: MainViewModel, onExit: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
             when {
                 vm.playing != null -> PlayerScreen(vm)
+                vm.playingVod != null -> VodPlayerScreen(vm)
                 showSettings -> SettingsScreen(vm, { addNew -> updateDialog = addNew }) { showSettings = false }
                 else -> BrowseScreen(vm) { showSettings = true }
             }
@@ -176,21 +180,34 @@ private fun BrowseScreen(vm: MainViewModel, onSettings: () -> Unit) {
         }
     }
 
+    // La búsqueda de una pestaña no se arrastra a otra (pero sí se conserva al volver del reproductor).
+    val shownTab = remember { arrayOf(vm.homeTab) }
+    LaunchedEffect(vm.homeTab) {
+        if (shownTab[0] != vm.homeTab) {
+            shownTab[0] = vm.homeTab
+            vm.query = ""
+        }
+    }
+
     Column(Modifier.fillMaxSize().padding(32.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onSettings) { Text("Ajustes") }
-            SearchField(vm)
-            VoiceSearchButton(vm)
-            Text(
-                "Mantén pulsado OK sobre un canal para sus opciones",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFB0B0C0),
-                modifier = Modifier.padding(start = 12.dp),
-            )
+        HomeTabs(vm, onSettings)
+        // Altura fija para que el contenido no salte al cambiar de pestaña.
+        Box(Modifier.heightIn(min = 28.dp).padding(top = 8.dp)) {
+            val warning = subscriptionWarning(vm.accountInfo)
+            if (warning != null) {
+                Text(warning, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFFFC107))
+            } else if (vm.homeTab == 0) {
+                Text(
+                    "Mantén pulsado OK sobre un canal para sus opciones",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFB0B0C0),
+                )
+            }
         }
         Row(Modifier.fillMaxSize().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             when {
                 vm.loading -> LoadingStatus(vm.progress, Modifier.width(480.dp))
+                vm.homeTab != 0 -> VodSection(vm, series = vm.homeTab == 2)
                 vm.error != null -> Text("Error: ${vm.error}")
                 vm.all.isEmpty() -> Text(
                     if (vm.source.isBlank()) "No hay ninguna lista. Ve a Ajustes → Actualizar lista para añadir una."
@@ -336,6 +353,51 @@ private fun BrowseScreen(vm: MainViewModel, onSettings: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** Aviso si la suscripción está inactiva, caducada o caduca en menos de una semana; null si todo va bien. */
+internal fun subscriptionWarning(info: AccountInfo?, now: Long = System.currentTimeMillis()): String? {
+    info ?: return null
+    if (!info.active) return "Tu suscripción no está activa"
+    val expires = info.expiresAtMs ?: return null
+    val days = Math.ceil((expires - now) / 86_400_000.0).toInt()
+    return when {
+        days < 0 -> "Tu suscripción ha caducado"
+        days == 0 -> "Tu suscripción caduca hoy"
+        days <= 7 -> "Tu suscripción caduca en $days ${if (days == 1) "día" else "días"}"
+        else -> null
+    }
+}
+
+private val homeTabs = listOf("En directo", "Películas", "Series")
+
+/** Barra superior: las secciones de contenido, la búsqueda y, a la derecha del todo, Ajustes. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun HomeTabs(vm: MainViewModel, onSettings: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        // Botones normales en vez de TabRow: la navegación con el mando es la de cualquier otra fila y el texto
+        // se pinta con los colores del botón (con TabRow el texto de la pestaña enfocada quedaba blanco sobre blanco).
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            homeTabs.forEachIndexed { i, label ->
+                val selected = vm.homeTab == i
+                Button(
+                    onClick = { vm.homeTab = i },
+                    colors = ButtonDefaults.colors(
+                        containerColor = if (selected) Color(0xFF4A4A5C) else Color.Transparent,
+                        contentColor = if (selected) Color.White else Color(0xFFC8C8D4),
+                    ),
+                ) { Text(label) }
+            }
+        }
+        Spacer(Modifier.width(16.dp))
+        // Con el texto grande las pestañas necesitan sitio: el campo de búsqueda se estrecha.
+        SearchField(vm, Modifier.width(if (vm.settings.textSize.scale > 1f) 200.dp else 280.dp))
+        Spacer(Modifier.width(12.dp))
+        VoiceSearchButton(vm)
+        Spacer(Modifier.width(24.dp))
+        Button(onClick = onSettings) { Text("Ajustes") }
     }
 }
 

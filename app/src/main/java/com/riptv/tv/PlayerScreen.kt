@@ -1,5 +1,6 @@
 package com.riptv.tv
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -73,6 +74,31 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Reproductor con la configuración de la app (red, colchón y decodificadores), compartido por canales y películas. */
+@OptIn(UnstableApi::class)
+internal fun createPlayer(context: Context, settings: AppPrefs): ExoPlayer {
+    // OkHttp en lugar del cliente básico de Android: reutiliza conexiones, sigue las redirecciones entre
+    // http y https y reintenta solo si una conexión reutilizada resulta estar cerrada.
+    val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+    val http = OkHttpDataSource.Factory(client).setUserAgent(settings.userAgent)
+    // Más colchón de vídeo = más aguante ante los microcortes de un servidor saturado.
+    val buffer = settings.bufferMode
+    val loadControl = DefaultLoadControl.Builder()
+        .setBufferDurationsMs(buffer.minMs, buffer.maxMs, buffer.startMs, buffer.rebufferMs)
+        .build()
+    return ExoPlayer.Builder(context)
+        .setRenderersFactory(AppRenderersFactory(context))
+        .setLoadControl(loadControl)
+        // Antes de dar un error por perdido un fragmento, reintenta varias veces con espera creciente.
+        .setMediaSourceFactory(DefaultMediaSourceFactory(http).setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(8)))
+        .build()
+        .apply { playWhenReady = true }
+}
+
 /**
  * Reproductor a pantalla completa. Mando: arriba/abajo cambian de canal, los números saltan a un
  * canal, OK pausa o reanuda, izquierda abre el panel de audio, subtítulos y favoritos.
@@ -82,28 +108,7 @@ import java.util.Locale
 internal fun PlayerScreen(vm: MainViewModel) {
     val channel = vm.playing ?: return
     val context = LocalContext.current
-    val player = remember {
-        // OkHttp en lugar del cliente básico de Android: reutiliza conexiones, sigue las redirecciones entre
-        // http y https y reintenta solo si una conexión reutilizada resulta estar cerrada.
-        val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
-        val http = OkHttpDataSource.Factory(client).setUserAgent(vm.settings.userAgent)
-        // Más colchón de vídeo = más aguante ante los microcortes de un servidor saturado.
-        val buffer = vm.settings.bufferMode
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(buffer.minMs, buffer.maxMs, buffer.startMs, buffer.rebufferMs)
-            .build()
-        ExoPlayer.Builder(context)
-            .setRenderersFactory(AppRenderersFactory(context))
-            .setLoadControl(loadControl)
-            // Antes de dar un error por perdido un fragmento, reintenta varias veces con espera creciente.
-            .setMediaSourceFactory(DefaultMediaSourceFactory(http).setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(8)))
-            .build()
-            .apply { playWhenReady = true }
-    }
+    val player = remember { createPlayer(context, vm.settings) }
     var buffering by remember { mutableStateOf(true) }
     // Fallos seguidos desde la última vez que el canal se reprodujo bien; 0 = todo en orden.
     var attempt by remember { mutableIntStateOf(0) }
@@ -249,7 +254,7 @@ internal fun PlayerScreen(vm: MainViewModel) {
         }
         if (showSchedule) ScheduleDialog(vm, channel) { showSchedule = false }
         if (panelOpen) {
-            TracksPanel(player, tracks, vm, channel, { panelOpen = false }, { showSchedule = true }, Modifier.align(Alignment.CenterEnd))
+            TracksPanel(player, tracks, vm, channel, { showSchedule = true }, Modifier.align(Alignment.CenterEnd))
         }
     }
 }
@@ -310,7 +315,6 @@ private fun TracksPanel(
     tracks: Tracks,
     vm: MainViewModel,
     channel: Channel,
-    onClose: () -> Unit,
     onSchedule: () -> Unit,
     modifier: Modifier,
 ) {
@@ -357,7 +361,6 @@ private fun TracksPanel(
         item { Text("Subtítulos", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp)) }
         item { PanelRow(noSubtitles.label, noSubtitles.selected) { noSubtitles.onSelect() } }
         items(subtitles) { o -> PanelRow(o.label, o.selected) { o.onSelect() } }
-        item { PanelRow("Cerrar", null, Modifier.padding(top = 12.dp)) { onClose() } }
     }
 }
 

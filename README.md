@@ -3,7 +3,7 @@
 Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para usarse con el mando a distancia. Interfaz en español, hecha con Jetpack Compose para TV y reproducción con Media3 (ExoPlayer).
 
 - **Paquete:** `com.riptv.tv`
-- **Versión:** 1.1 (`versionCode` 2)
+- **Versión:** 1.1.0 (`versionCode` 3)
 - **Android:** minSdk 23, targetSdk 35
 - **Requisitos del dispositivo:** Leanback (Android TV); no necesita pantalla táctil
 
@@ -18,6 +18,16 @@ Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para u
 - Ocultar grupos y canales concretos, y lista de canales recientes.
 - Búsqueda por texto o por voz, en el grupo actual o en todos los canales.
 - Opción de arrancar en la lista o en el último canal visto.
+
+### Películas y series
+- La pantalla de inicio tiene las pestañas **En directo**, **Películas** y **Series**, y Ajustes a la derecha.
+- El catálogo se pide a la API del servidor (`player_api.php`), deduciendo servidor, usuario y contraseña de la URL de un canal. Si el servidor no ofrece catálogo, la pestaña lo avisa.
+- Categorías a la izquierda, carteles y búsqueda. Una película abre su ficha (sinopsis, reparto, dirección, valoración, duración y tráiler si lo hay); una serie abre su ficha con temporadas y episodios.
+- Ajustes → Avanzado → Información muestra la caducidad de la suscripción y las conexiones en uso; la pantalla de inicio avisa cuando caduca en menos de una semana.
+- Reproductor propio: OK pausa, izquierda/derecha ±10 s, arriba/abajo ±1 min.
+
+### Actualizaciones
+- En Ajustes → Avanzado → **Buscar actualizaciones**: consulta la última release de [GitHub](https://github.com/rockola15/riptv/releases), descarga el APK y abre el instalador del sistema. Solo funciona si el APK está firmado con la misma clave que la app instalada.
 
 ### Reproducción
 - Cambio de canal con las flechas arriba/abajo o con las teclas de canal, y salto directo tecleando el número.

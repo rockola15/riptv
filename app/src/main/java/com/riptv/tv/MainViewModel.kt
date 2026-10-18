@@ -2,6 +2,7 @@ package com.riptv.tv
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -11,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /** Grupo virtual con los canales favoritos. */
@@ -60,6 +63,98 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     private var startupPending = true
+
+    // ---- Películas y series ----
+
+    /** Pestaña de la pantalla principal: 0 = En directo, 1 = Películas, 2 = Series. */
+    var homeTab by mutableIntStateOf(0)
+
+    /** Película o episodio en reproducción; null si no se está viendo ninguno. */
+    var playingVod by mutableStateOf<VodPlay?>(null)
+
+    var movies by mutableStateOf<VodCatalog?>(null); private set
+    var seriesCatalog by mutableStateOf<VodCatalog?>(null); private set
+    var moviesError by mutableStateOf<String?>(null); private set
+    var seriesError by mutableStateOf<String?>(null); private set
+    private var moviesLoading = false
+    private var seriesLoading = false
+
+    /** Categoría elegida y último elemento abierto en cada sección, para recuperarlos al volver del reproductor. */
+    var movieCategory by mutableStateOf<String?>(null)
+    var seriesCategory by mutableStateOf<String?>(null)
+    var lastVodId by mutableStateOf<String?>(null)
+
+    /** Cuenta del proveedor deducida de un canal de la lista; null si la lista no es de un servidor con catálogo. */
+    val vodAccount: Vod.Account? get() = Vod.Account.from(all.firstOrNull()?.url)
+
+    fun loadMovies() {
+        if (movies != null || moviesLoading) return
+        val account = vodAccount ?: run { moviesError = NO_CATALOG; return }
+        moviesLoading = true
+        moviesError = null
+        viewModelScope.launch {
+            try {
+                movies = Vod.movies(account, settings.userAgent)
+            } catch (e: Exception) {
+                moviesError = e.message ?: e.toString()
+            }
+            moviesLoading = false
+        }
+    }
+
+    fun loadSeries() {
+        if (seriesCatalog != null || seriesLoading) return
+        val account = vodAccount ?: run { seriesError = NO_CATALOG; return }
+        seriesLoading = true
+        seriesError = null
+        viewModelScope.launch {
+            try {
+                seriesCatalog = Vod.series(account, settings.userAgent)
+            } catch (e: Exception) {
+                seriesError = e.message ?: e.toString()
+            }
+            seriesLoading = false
+        }
+    }
+
+    /** Suscripción del proveedor (caducidad y conexiones); null mientras no se conozca. */
+    var accountInfo by mutableStateOf<AccountInfo?>(null); private set
+
+    fun loadAccount() {
+        val account = vodAccount ?: return
+        viewModelScope.launch { Vod.accountInfo(account, settings.userAgent)?.let { accountInfo = it } }
+    }
+
+    /** Fichas de películas ya pedidas (género y duración no vienen en la lista), por id; se piden solo las que se ven en pantalla. */
+    private val movieInfoCache = mutableStateMapOf<String, VodInfo>()
+    private val movieInfoGate = Semaphore(1)
+
+    fun movieInfoFor(id: String): VodInfo? = movieInfoCache[id]
+
+    suspend fun loadMovieInfo(id: String) {
+        if (id in movieInfoCache) return
+        val account = vodAccount ?: return
+        movieInfoGate.withPermit {
+            if (id in movieInfoCache) return
+            Vod.movieInfo(account, id, settings.userAgent)?.let { movieInfoCache[id] = it }
+        }
+    }
+
+    /** Vuelve a pedir el catálogo (tras fallar o al cambiar de lista). */
+    private fun resetVod() {
+        movieInfoCache.clear()
+        movies = null
+        seriesCatalog = null
+        moviesError = null
+        seriesError = null
+        movieCategory = null
+        seriesCategory = null
+        lastVodId = null
+    }
+
+    fun retryVod(series: Boolean) {
+        if (series) { seriesError = null; loadSeries() } else { moviesError = null; loadMovies() }
+    }
 
     // ---- Logos y guía por canal (se piden en segundo plano, solo para lo que se ve) ----
 
@@ -301,6 +396,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 listGroups = all.map { it.group }.distinct()
                 group = null
+                resetVod()
+                accountInfo = null
+                loadAccount()
                 nowPlayingCache.clear()
                 loadLogoIndex(all.firstOrNull()?.url)
                 lastUpdated = repo.lastUpdated
@@ -323,3 +421,5 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 private const val MAX_RECENTS = 20
+
+private const val NO_CATALOG = "Esta lista no incluye películas ni series (el servidor no ofrece catálogo)."

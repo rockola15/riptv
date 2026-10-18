@@ -14,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -53,7 +54,14 @@ internal fun ScheduleDialog(vm: MainViewModel, channel: Channel, onDismiss: () -
         failed = result == null
         programs = result.orEmpty()
     }
-    LaunchedEffect(Unit) { first.requestFocus() }
+    // El foco empieza en el programa en emisión (o el primero) para poder desplazarse con el mando.
+    LaunchedEffect(programs) {
+        if (programs.isNullOrEmpty()) return@LaunchedEffect
+        repeat(5) {
+            if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect
+            withFrameNanos { }
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -67,7 +75,6 @@ internal fun ScheduleDialog(vm: MainViewModel, channel: Channel, onDismiss: () -
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { heading() },
             )
-            Button(onClick = onDismiss, modifier = Modifier.focusRequester(first)) { Text("Cerrar") }
             val list = programs
             when {
                 list == null -> Text("Cargando programación…", style = MaterialTheme.typography.bodyLarge)
@@ -89,6 +96,7 @@ internal fun ScheduleDialog(vm: MainViewModel, channel: Channel, onDismiss: () -
                         }
                     }
                     val now = System.currentTimeMillis()
+                    val focusTarget = entries.filterIsInstance<Program>().let { all -> all.firstOrNull { it.startMs <= now && it.endMs > now } ?: all.firstOrNull() }
                     LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                         items(entries) { e ->
                             if (e is String) {
@@ -110,7 +118,7 @@ internal fun ScheduleDialog(vm: MainViewModel, channel: Channel, onDismiss: () -
                                             maxLines = 1,
                                         )
                                     },
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier.fillMaxWidth().then(if (e == focusTarget) Modifier.focusRequester(first) else Modifier),
                                 )
                             }
                         }

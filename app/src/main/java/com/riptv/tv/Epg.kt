@@ -79,8 +79,23 @@ object Epg {
             r.endArray()
         }
         r.endObject()
-        return out.sortedBy { it.startMs }.take(limit).map { it.copy(title = decode(it.title)) }
+        return withoutOverlaps(out).take(limit).map { it.copy(title = decode(it.title)) }
     }
+
+    /**
+     * Algunos proveedores mezclan dos fuentes de guía en el mismo canal y la tabla trae programas que se
+     * pisan (p. ej. dos «en emisión» a la vez). Se conserva una sola secuencia: cada programa vale solo si
+     * empieza cuando termina el anterior (con unos minutos de margen), para que «Después» no sea un duplicado
+     * del programa actual.
+     */
+    private fun withoutOverlaps(programs: List<Program>): List<Program> {
+        var lastEnd = 0L
+        return programs.sortedWith(compareBy({ it.startMs }, { it.endMs })).filter {
+            (it.startMs >= lastEnd - OVERLAP_TOLERANCE_MS).also { keep -> if (keep) lastEnd = it.endMs }
+        }
+    }
+
+    private const val OVERLAP_TOLERANCE_MS = 2 * 60_000L
 
     private fun JsonReader.text(): String =
         if (peek() == JsonToken.NULL) { nextNull(); "" } else nextString()

@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,12 +53,14 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Tab
 import androidx.tv.material3.TabRow
 import androidx.tv.material3.Text
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.withFrameNanos
 import java.text.DateFormat
 import java.util.Date
 
 private enum class Page {
     MAIN, LISTS, REFRESH, GROUPS, GROUP_ORDER, GROUP_CUSTOM, SORT, HIDDEN, SEARCH,
-    START, ZAP, EPG, EPG_SHIFT, BUFFER, NUMBERS, TEXT_SIZE, ASPECT, PARENTAL, USER_AGENT, INFO,
+    START, ZAP, EPG, EPG_SHIFT, BUFFER, NUMBERS, TEXT_SIZE, ASPECT, PARENTAL, USER_AGENT, INFO, UPDATE,
 }
 
 private fun sortLabel(o: SortOrder) = when (o) {
@@ -130,14 +133,14 @@ internal fun SettingsScreen(vm: MainViewModel, onUpdate: (addNew: Boolean) -> Un
             focusIndex = focusIndex,
             onUpdate = { focusIndex = 0; onUpdate(false) },
             onOpen = { index, target -> focusIndex = index; page = target },
-            onClose = onClose,
         )
-        Page.LISTS -> ListsPage(vm, onAdd = { onUpdate(true) }, onBack = toMenu)
-        Page.GROUPS -> GroupsPage(vm, toMenu)
-        Page.GROUP_CUSTOM -> CustomGroupOrderPage(vm, toMenu)
-        Page.HIDDEN -> HiddenPage(vm, toMenu)
+        Page.LISTS -> ListsPage(vm, onAdd = { onUpdate(true) })
+        Page.GROUPS -> GroupsPage(vm)
+        Page.GROUP_CUSTOM -> CustomGroupOrderPage(vm)
+        Page.HIDDEN -> HiddenPage(vm)
         Page.PARENTAL -> ParentalPage(vm, toMenu)
-        Page.INFO -> InfoPage(vm, toMenu)
+        Page.INFO -> InfoPage(vm)
+        Page.UPDATE -> UpdatePage()
         Page.USER_AGENT -> UserAgentPage(vm, toMenu)
         Page.REFRESH -> ChoicePage(
             title = "Actualización automática",
@@ -316,7 +319,6 @@ private fun SettingsMenu(
     focusIndex: Int,
     onUpdate: () -> Unit,
     onOpen: (Int, Page) -> Unit,
-    onClose: () -> Unit,
 ) {
     val s = vm.settings
     val updated = vm.lastUpdated?.let(::dateTime)
@@ -377,6 +379,7 @@ private fun SettingsMenu(
             },
             Page.USER_AGENT,
         ),
+        MenuEntry(4, "Buscar actualizaciones", "Descarga e instala la última versión de RipTV", Page.UPDATE),
         MenuEntry(4, "Información y mantenimiento", "Versión, espacio usado, borrar caché y restablecer", Page.INFO),
     )
     val focus = remember { List(entries.size) { FocusRequester() } }
@@ -388,14 +391,38 @@ private fun SettingsMenu(
         target?.let { runCatching { focus[it].requestFocus() } }
     }
 
+    // Izquierda/derecha sobre una opción cambian de pestaña; el foco pasa a la primera opción de la nueva.
+    var refocus by remember { mutableStateOf(false) }
+    LaunchedEffect(tab) {
+        if (!refocus) return@LaunchedEffect
+        val target = entries.indexOfFirst { it.tab == tab }
+        // Las filas de la lista perezosa se colocan un instante después de componerse.
+        repeat(5) {
+            if (runCatching { focus[target].requestFocus() }.isSuccess) {
+                refocus = false
+                return@LaunchedEffect
+            }
+            withFrameNanos { }
+        }
+        refocus = false
+    }
+    fun switchTab(delta: Int) {
+        val next = tab + delta
+        if (next in settingsTabs.indices) {
+            refocus = true
+            onTab(next)
+        }
+    }
+
     SettingsPage("Ajustes") {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Button(onClick = onClose) { Text("Volver") }
             TabRow(selectedTabIndex = tab, modifier = Modifier.weight(1f)) {
                 settingsTabs.forEachIndexed { i, label ->
                     Tab(
                         selected = tab == i,
-                        onFocus = { onTab(i) },
+                        // Al cambiar de pestaña con izquierda/derecha la fila enfocada desaparece y el foco cae un instante en la
+                        // primera pestaña: mientras se recoloca, ese foco no debe volver a seleccionarla.
+                        onFocus = { if (!refocus) onTab(i) },
                         onClick = { onTab(i) },
                         modifier = Modifier.focusRequester(tabFocus[i]),
                     ) {
@@ -413,6 +440,16 @@ private fun SettingsMenu(
                     // (como las pestañas se seleccionan al recibir el foco, si no cambiaría de pestaña).
                     modifier = Modifier
                         .focusRequester(focus[i])
+                        .onPreviewKeyEvent { e ->
+                            val delta = when (e.key) {
+                                Key.DirectionLeft -> -1
+                                Key.DirectionRight -> 1
+                                else -> 0
+                            }
+                            if (delta == 0) return@onPreviewKeyEvent false
+                            if (e.type == KeyEventType.KeyDown) switchTab(delta)
+                            true
+                        }
                         .then(if (pos == 0) Modifier.focusProperties { up = tabFocus[tab] } else Modifier),
                     onClick = { if (e.page == null) onUpdate() else onOpen(i, e.page) },
                 )
@@ -478,15 +515,13 @@ private fun <T> ChoicePage(
             )
         }
         footer?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB0B0C0)) }
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onBack) { Text("Volver") }
     }
 }
 
 /** Marcar los grupos que se quieren ver; sin ninguno marcado se muestran todos. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun GroupsPage(vm: MainViewModel, onBack: () -> Unit) {
+private fun GroupsPage(vm: MainViewModel) {
     val groups = vm.orderedGroups
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { first.requestFocus() }
@@ -502,8 +537,7 @@ private fun GroupsPage(vm: MainViewModel, onBack: () -> Unit) {
             style = MaterialTheme.typography.titleMedium,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack, modifier = Modifier.focusRequester(first)) { Text("Volver") }
-            Button(onClick = vm::showAllGroups) { Text("Mostrar todos") }
+            Button(onClick = vm::showAllGroups, modifier = Modifier.focusRequester(first)) { Text("Mostrar todos") }
         }
         val selected = vm.settings.enabledGroups
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
@@ -532,12 +566,18 @@ private fun CheckRow(label: String, on: Boolean, onClick: () -> Unit) {
 /** Ordenar los grupos a mano: OK coge un grupo, ▲▼ lo mueven y OK lo suelta. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun CustomGroupOrderPage(vm: MainViewModel, onBack: () -> Unit) {
+private fun CustomGroupOrderPage(vm: MainViewModel) {
     val groups = vm.orderedGroups
     var moving by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { first.requestFocus() }
+    // El primer grupo es una fila de la lista perezosa: se espera a que se coloque para darle el foco.
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect
+            withFrameNanos { }
+        }
+    }
     // Si el grupo que se mueve sale de la zona visible, la lista lo sigue.
     LaunchedEffect(moving, groups) {
         val index = groups.indexOf(moving)
@@ -553,7 +593,6 @@ private fun CustomGroupOrderPage(vm: MainViewModel, onBack: () -> Unit) {
             else "Moviendo «$moving»: usa las flechas arriba y abajo y pulsa OK para soltarlo.",
             style = MaterialTheme.typography.bodyLarge,
         )
-        Button(onClick = onBack, modifier = Modifier.focusRequester(first)) { Text("Volver") }
         LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState) {
             items(groups, key = { it }) { g ->
                 val picked = g == moving
@@ -564,6 +603,7 @@ private fun CustomGroupOrderPage(vm: MainViewModel, onBack: () -> Unit) {
                     headlineContent = { Text(g, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(if (g == groups.firstOrNull()) Modifier.focusRequester(first) else Modifier)
                         .onPreviewKeyEvent { e ->
                             if (!picked || e.type != KeyEventType.KeyDown) false
                             else when (e.key) {
@@ -582,10 +622,10 @@ private fun CustomGroupOrderPage(vm: MainViewModel, onBack: () -> Unit) {
 /** Lista de canales ocultos; al pulsar uno vuelve a mostrarse. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun HiddenPage(vm: MainViewModel, onBack: () -> Unit) {
+private fun HiddenPage(vm: MainViewModel) {
     val hidden = vm.hiddenChannels
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { first.requestFocus() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
 
     SettingsPage("Canales ocultos") {
         Text(
@@ -594,8 +634,7 @@ private fun HiddenPage(vm: MainViewModel, onBack: () -> Unit) {
             style = MaterialTheme.typography.bodyLarge,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack, modifier = Modifier.focusRequester(first)) { Text("Volver") }
-            if (hidden.isNotEmpty()) Button(onClick = vm::showAllHidden) { Text("Mostrar todos") }
+            if (hidden.isNotEmpty()) Button(onClick = vm::showAllHidden, modifier = Modifier.focusRequester(first)) { Text("Mostrar todos") }
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
             items(hidden, key = { it.key }) { ch ->
@@ -665,14 +704,12 @@ private fun ParentalPage(vm: MainViewModel, onBack: () -> Unit) {
         if (!s.hasPin) {
             Text("Crea un PIN de 4 dígitos para bloquear los grupos que elijas. Los grupos bloqueados no aparecen hasta introducir el PIN.", style = MaterialTheme.typography.bodyLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onBack) { Text("Volver") }
                 Button(onClick = { pinError = null; step = PinStep.NEW }, modifier = Modifier.focusRequester(first)) { Text("Crear PIN") }
             }
         } else {
             Text("Marca los grupos que quieres bloquear. Se desbloquean al introducir el PIN y vuelven a bloquearse al cerrar la app.", style = MaterialTheme.typography.bodyLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onBack, modifier = Modifier.focusRequester(first)) { Text("Volver") }
-                Button(onClick = { pinError = null; step = PinStep.NEW }) { Text("Cambiar PIN") }
+                Button(onClick = { pinError = null; step = PinStep.NEW }, modifier = Modifier.focusRequester(first)) { Text("Cambiar PIN") }
                 Button(onClick = { confirmRemove = true }) { Text("Quitar PIN") }
             }
             val locked = s.lockedGroups
@@ -718,9 +755,10 @@ private fun UserAgentPage(vm: MainViewModel, onBack: () -> Unit) {
 /** Datos de la app y acciones de mantenimiento (con confirmación). */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun InfoPage(vm: MainViewModel, onBack: () -> Unit) {
+private fun InfoPage(vm: MainViewModel) {
     val context = LocalContext.current
     val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?" }
+    LaunchedEffect(Unit) { vm.loadAccount() }
     var confirm by remember { mutableStateOf<String?>(null) }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { first.requestFocus() }
@@ -749,14 +787,110 @@ private fun InfoPage(vm: MainViewModel, onBack: () -> Unit) {
             "Última actualización: ${vm.lastUpdated?.let(::dateTime) ?: "—"}",
             "Favoritos: ${vm.settings.favorites.size} · Ocultos: ${vm.settings.hidden.size}",
             "Espacio de caché: %.1f MB".format(vm.cacheSize / 1_048_576.0),
+        ) + listOfNotNull(
+            vm.accountInfo?.let { a ->
+                "Suscripción: " + when {
+                    !a.active -> "no activa"
+                    a.expiresAtMs == null -> "sin caducidad"
+                    else -> "hasta el ${dateTime(a.expiresAtMs)}" + (if (a.trial) " (prueba)" else "")
+                }
+            },
+            vm.accountInfo?.let { a -> a.maxConnections?.let { "Conexiones: ${a.activeConnections ?: 0} en uso de $it" } },
         )
         lines.forEach { Text(it, style = MaterialTheme.typography.bodyLarge) }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack, modifier = Modifier.focusRequester(first)) { Text("Volver") }
-            Button(onClick = { confirm = "cache" }) { Text("Borrar caché") }
+            Button(onClick = { confirm = "cache" }, modifier = Modifier.focusRequester(first)) { Text("Borrar caché") }
             Button(onClick = vm::clearRecents) { Text("Borrar recientes") }
             Button(onClick = { confirm = "reset" }) { Text("Restablecer ajustes") }
+        }
+    }
+}
+
+private sealed interface UpdateState {
+    data object Checking : UpdateState
+    data object UpToDate : UpdateState
+    data object NoRelease : UpdateState
+    data class Available(val release: Release) : UpdateState
+    data class Downloading(val release: Release, val percent: Int?) : UpdateState
+    data class Failed(val message: String) : UpdateState
+}
+
+/** Busca la última release en GitHub y, si es más nueva que la instalada, la descarga y lanza el instalador. */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UpdatePage() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val version = remember { runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0" }
+    var state by remember { mutableStateOf<UpdateState>(UpdateState.Checking) }
+    var permissionHint by remember { mutableStateOf(false) }
+    val first = remember { FocusRequester() }
+
+    suspend fun check() {
+        state = UpdateState.Checking
+        state = try {
+            val release = Updater.latest()
+            when {
+                release == null -> UpdateState.NoRelease
+                Updater.isNewer(release.version, version) -> UpdateState.Available(release)
+                else -> UpdateState.UpToDate
+            }
+        } catch (e: Exception) {
+            UpdateState.Failed(e.message ?: e.toString())
+        }
+    }
+
+    fun install(release: Release) {
+        scope.launch {
+            permissionHint = false
+            state = UpdateState.Downloading(release, null)
+            state = try {
+                val apk = Updater.download(context, release) { state = UpdateState.Downloading(release, it) }
+                permissionHint = !Updater.install(context, apk)
+                UpdateState.Available(release)
+            } catch (e: Exception) {
+                UpdateState.Failed(e.message ?: e.toString())
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { check() }
+    // Los botones cambian con el estado: el foco va al primero que haya.
+    LaunchedEffect(state) { runCatching { first.requestFocus() } }
+
+    SettingsPage("Buscar actualizaciones") {
+        Text("Versión instalada: $version", style = MaterialTheme.typography.bodyLarge)
+        when (val s = state) {
+            UpdateState.Checking -> Text("Buscando la última versión…", style = MaterialTheme.typography.titleMedium)
+            UpdateState.UpToDate -> Text("Tienes la última versión.", style = MaterialTheme.typography.titleMedium)
+            UpdateState.NoRelease -> Text("Todavía no hay ninguna versión publicada.", style = MaterialTheme.typography.titleMedium)
+            is UpdateState.Available -> {
+                Text("Hay una versión nueva: ${s.release.version}", style = MaterialTheme.typography.titleMedium)
+                if (s.release.notes.isNotBlank()) Text(s.release.notes.take(600), style = MaterialTheme.typography.bodyMedium, maxLines = 8)
+                if (permissionHint) {
+                    Text(
+                        "Permite a RipTV instalar aplicaciones en la pantalla que se ha abierto, vuelve atrás y pulsa de nuevo.",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            }
+            is UpdateState.Downloading -> Text(
+                "Descargando ${s.release.version}…" + (s.percent?.let { " $it%" } ?: ""),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            is UpdateState.Failed -> Text("No se pudo completar: ${s.message}", style = MaterialTheme.typography.bodyLarge, color = Color(0xFFFF8A80))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            val s = state
+            if (s is UpdateState.Available) Button(onClick = { install(s.release) }, modifier = Modifier.focusRequester(first)) { Text("Descargar e instalar") }
+            if (s !is UpdateState.Checking && s !is UpdateState.Downloading) {
+                Button(
+                    onClick = { scope.launch { check() } },
+                    modifier = if (s is UpdateState.Available) Modifier else Modifier.focusRequester(first),
+                ) { Text("Buscar de nuevo") }
+            }
         }
     }
 }
@@ -764,7 +898,7 @@ private fun InfoPage(vm: MainViewModel, onBack: () -> Unit) {
 /** Listas guardadas: pulsar una ofrece usarla o eliminarla. */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun ListsPage(vm: MainViewModel, onAdd: () -> Unit, onBack: () -> Unit) {
+private fun ListsPage(vm: MainViewModel, onAdd: () -> Unit) {
     var selected by remember { mutableStateOf<SavedList?>(null) }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { first.requestFocus() }
@@ -787,7 +921,6 @@ private fun ListsPage(vm: MainViewModel, onAdd: () -> Unit, onBack: () -> Unit) 
             style = MaterialTheme.typography.bodyLarge,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack) { Text("Volver") }
             Button(onClick = onAdd, modifier = Modifier.focusRequester(first)) { Text("Añadir lista") }
         }
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {

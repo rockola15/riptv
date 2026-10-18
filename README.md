@@ -3,7 +3,7 @@
 Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para usarse con el mando a distancia. Interfaz en español, hecha con Jetpack Compose para TV y reproducción con Media3 (ExoPlayer).
 
 - **Paquete:** `com.riptv.tv`
-- **Versión:** 1.1.0 (`versionCode` 3)
+- **Versión:** 1.0.0 (`versionCode` 3)
 - **Android:** minSdk 23, targetSdk 35
 - **Requisitos del dispositivo:** Leanback (Android TV); no necesita pantalla táctil
 

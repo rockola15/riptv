@@ -346,11 +346,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Listas ----
 
-    /** Cambia la URL de la lista activa, o añade una nueva lista, y la descarga. */
+    /** Cambia la URL de la lista activa, o añade una nueva lista, y la descarga. Si una lista nueva falla, no se guarda. */
     fun applyUrl(url: String, addNew: Boolean) {
-        if (addNew) repo.addList(url) else repo.setSource(url)
-        refreshListState()
-        reload(refresh = true)
+        val previousId = repo.active?.id
+        if (addNew) {
+            val added = repo.addList(url)
+            refreshListState()
+            reload(refresh = true, onFailure = {
+                repo.removeList(added.id)
+                previousId?.let { repo.selectList(it) }
+                refreshListState()
+            })
+        } else {
+            repo.setSource(url)
+            refreshListState()
+            reload(refresh = true)
+        }
     }
 
     fun selectList(id: String) {
@@ -379,7 +390,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val cacheSize: Long get() = repo.cacheSize
 
-    fun reload(refresh: Boolean, fallbackToCache: Boolean = false) {
+    /** [onFailure] se ejecuta si la carga falla o la lista no tiene canales (la lista anterior sigue cargada). */
+    fun reload(refresh: Boolean, fallbackToCache: Boolean = false, onFailure: (() -> Unit)? = null) {
         viewModelScope.launch {
             loading = true
             error = null
@@ -393,7 +405,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (!(refresh && fallbackToCache)) throw e
                         repo.load(refresh = false, agent) { progress = it }
                     }
-                }
+                }.also { if (onFailure != null && it.isEmpty()) throw IllegalStateException("La lista no contiene canales") }
                 listGroups = all.map { it.group }.distinct()
                 group = null
                 resetVod()
@@ -405,6 +417,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (all.isEmpty() && repo.source.isNotBlank()) error = "La lista no contiene canales"
                 resumeLastChannel()
             } catch (e: Exception) {
+                onFailure?.invoke()
                 error = e.message ?: e.toString()
             }
             startupPending = false

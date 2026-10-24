@@ -82,6 +82,9 @@ class AppPrefs(context: Context) {
         prefs.edit().putString("user_agent", it).apply()
     }
 
+    /** Página de la que se leen los partidos de la pestaña Acestream; vacía hasta que el usuario la pone. */
+    var aceUrl: String by state(prefs.getString("ace_url", null).orEmpty()) { prefs.edit().putString("ace_url", it).apply() }
+
     // Canales y grupos
     var sortOrder by enumState("sort_order", SortOrder.LIST)
     var groupOrder by enumState("group_order", GroupOrder.ALPHABETICAL)

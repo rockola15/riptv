@@ -66,7 +66,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Películas y series ----
 
-    /** Pestaña de la pantalla principal: 0 = En directo, 1 = Películas, 2 = Series. */
+    /** Pestaña de la pantalla principal: 0 = En directo, 1 = Películas, 2 = Series, 3 = Acestream. */
     var homeTab by mutableIntStateOf(0)
 
     /** Película o episodio en reproducción; null si no se está viendo ninguno. */
@@ -138,6 +138,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (id in movieInfoCache) return
             Vod.movieInfo(account, id, settings.userAgent)?.let { movieInfoCache[id] = it }
         }
+    }
+
+    // ---- Acestream (no depende de la lista) ----
+
+    var aceMatches by mutableStateOf<List<AceMatch>?>(null); private set
+    var aceError by mutableStateOf<String?>(null); private set
+    var aceDate by mutableStateOf<String?>(null)
+    var aceLoading by mutableStateOf(false); private set
+
+    fun loadAcestream() {
+        val url = settings.aceUrl
+        if (url.isBlank() || aceMatches != null || aceLoading) return
+        aceLoading = true
+        aceError = null
+        viewModelScope.launch {
+            try {
+                aceMatches = Acestream.matches(url, settings.userAgent)
+            } catch (e: Exception) {
+                aceError = e.message ?: e.toString()
+            }
+            aceLoading = false
+        }
+    }
+
+    fun retryAcestream() {
+        aceError = null
+        loadAcestream()
+    }
+
+    /** Cambia la URL de la agenda y la vuelve a descargar. Sin «http» delante se supone https. */
+    fun applyAceUrl(url: String) {
+        if (aceLoading) return
+        settings.aceUrl = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+        aceMatches = null
+        aceError = null
+        aceDate = null
+        loadAcestream()
     }
 
     /** Vuelve a pedir el catálogo (tras fallar o al cambiar de lista). */
@@ -346,11 +383,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Listas ----
 
-    /** Cambia la URL de la lista activa, o añade una nueva lista, y la descarga. */
+    /** Cambia la URL de la lista activa, o añade una nueva lista, y la descarga. Si una lista nueva falla, no se guarda. */
     fun applyUrl(url: String, addNew: Boolean) {
-        if (addNew) repo.addList(url) else repo.setSource(url)
-        refreshListState()
-        reload(refresh = true)
+        val previousId = repo.active?.id
+        if (addNew) {
+            val added = repo.addList(url)
+            refreshListState()
+            reload(refresh = true, onFailure = {
+                repo.removeList(added.id)
+                previousId?.let { repo.selectList(it) }
+                refreshListState()
+            })
+        } else {
+            repo.setSource(url)
+            refreshListState()
+            reload(refresh = true)
+        }
     }
 
     fun selectList(id: String) {
@@ -379,7 +427,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val cacheSize: Long get() = repo.cacheSize
 
-    fun reload(refresh: Boolean, fallbackToCache: Boolean = false) {
+    /** [onFailure] se ejecuta si la carga falla o la lista no tiene canales (la lista anterior sigue cargada). */
+    fun reload(refresh: Boolean, fallbackToCache: Boolean = false, onFailure: (() -> Unit)? = null) {
         viewModelScope.launch {
             loading = true
             error = null
@@ -393,7 +442,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (!(refresh && fallbackToCache)) throw e
                         repo.load(refresh = false, agent) { progress = it }
                     }
-                }
+                }.also { if (onFailure != null && it.isEmpty()) throw IllegalStateException("La lista no contiene canales") }
                 listGroups = all.map { it.group }.distinct()
                 group = null
                 resetVod()
@@ -405,6 +454,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (all.isEmpty() && repo.source.isNotBlank()) error = "La lista no contiene canales"
                 resumeLastChannel()
             } catch (e: Exception) {
+                onFailure?.invoke()
                 error = e.message ?: e.toString()
             }
             startupPending = false

@@ -3,7 +3,7 @@
 Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para usarse con el mando a distancia. Interfaz en español, hecha con Jetpack Compose para TV y reproducción con Media3 (ExoPlayer).
 
 - **Paquete:** `com.riptv.tv`
-- **Versión:** 1.1.0 (`versionCode` 4)
+- **Versión:** 1.2.0 (`versionCode` 5)
 - **Android:** minSdk 23, targetSdk 35
 - **Requisitos del dispositivo:** Leanback (Android TV); no necesita pantalla táctil
 
@@ -20,11 +20,17 @@ Reproductor de listas IPTV (M3U) para Android TV y cajas Android, pensado para u
 - Opción de arrancar en la lista o en el último canal visto.
 
 ### Películas y series
-- La pantalla de inicio tiene las pestañas **En directo**, **Películas** y **Series**, y Ajustes a la derecha.
+- La pantalla de inicio tiene las pestañas **En directo**, **Películas**, **Series** y **Acestream**, y Ajustes a la derecha.
 - El catálogo se pide a la API del servidor (`player_api.php`), deduciendo servidor, usuario y contraseña de la URL de un canal. Si el servidor no ofrece catálogo, la pestaña lo avisa.
 - Categorías a la izquierda, carteles y búsqueda. Una película abre su ficha (sinopsis, reparto, dirección, valoración, duración y tráiler si lo hay); una serie abre su ficha con temporadas y episodios.
 - Ajustes → Avanzado → Información muestra la caducidad de la suscripción y las conexiones en uso; la pantalla de inicio avisa cuando caduca en menos de una semana.
 - Reproductor propio con la misma barra de iconos: OK muestra la barra; retroceso y avance de 10 s (rápido si se mantiene pulsado), audio y relación de aspecto; arriba/abajo ±1 min.
+
+### Acestream
+- Pestaña con los partidos de Primera División y sus enlaces `acestream://`, agrupados por día (con búsqueda por equipo). No depende de la lista M3U.
+- La URL de la página con la agenda no viene en la app: se pone en Ajustes → Lista → **Agenda Acestream** (o desde la propia pestaña), con la misma ventana que las listas: QR para mandarla desde el móvil o escribirla con el mando.
+- La página no tiene API: la app la descarga y lee su HTML (`Acestream.kt`). Si cambia de maquetación hay que ajustar el lector.
+- Pulsar un enlace lo abre en la app **Ace Stream** del dispositivo, que tiene que estar instalada. Los enlaces que la web marca como caídos salen al final.
 
 ### Actualizaciones
 - En Ajustes → Avanzado → **Buscar actualizaciones**: consulta la última release de [GitHub](https://github.com/rockola15/riptv/releases), descarga el APK y abre el instalador del sistema. Solo funciona si el APK está firmado con la misma clave que la app instalada.

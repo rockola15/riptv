@@ -115,7 +115,7 @@ private fun dateTime(ms: Long) = DateFormat.getDateTimeInstance(DateFormat.MEDIU
  * por opción. Se maneja solo con el mando; Atrás vuelve al menú y, desde el menú, a la app.
  */
 @Composable
-internal fun SettingsScreen(vm: MainViewModel, onUpdate: (addNew: Boolean) -> Unit, onClose: () -> Unit) {
+internal fun SettingsScreen(vm: MainViewModel, onUpdate: (addNew: Boolean) -> Unit, onAce: () -> Unit, onClose: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
     var focusIndex by rememberSaveable { mutableIntStateOf(0) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -132,6 +132,7 @@ internal fun SettingsScreen(vm: MainViewModel, onUpdate: (addNew: Boolean) -> Un
             onTab = { tab = it },
             focusIndex = focusIndex,
             onUpdate = { focusIndex = 0; onUpdate(false) },
+            onAce = { focusIndex = 0; onAce() },
             onOpen = { index, target -> focusIndex = index; page = target },
         )
         Page.LISTS -> ListsPage(vm, onAdd = { onUpdate(true) })
@@ -303,7 +304,7 @@ private fun SettingsPage(title: String, scrollable: Boolean = false, content: @C
 
 private val settingsTabs = listOf("Lista", "Canales", "Reproducción", "Interfaz", "Avanzado")
 
-private class MenuEntry(val tab: Int, val title: String, val value: String, val page: Page?)
+private class MenuEntry(val tab: Int, val title: String, val value: String, val page: Page?, val ace: Boolean = false)
 
 /**
  * Menú de ajustes dividido en pestañas (Lista, Canales, Reproducción, Interfaz y Avanzado) para que cada
@@ -318,6 +319,7 @@ private fun SettingsMenu(
     onTab: (Int) -> Unit,
     focusIndex: Int,
     onUpdate: () -> Unit,
+    onAce: () -> Unit,
     onOpen: (Int, Page) -> Unit,
 ) {
     val s = vm.settings
@@ -337,6 +339,12 @@ private fun SettingsMenu(
             0, "Mis listas",
             vm.lists.firstOrNull { it.id == vm.activeListId }?.let { "${it.name} · ${vm.lists.size} guardadas" } ?: "Ninguna guardada",
             Page.LISTS,
+        ),
+        MenuEntry(
+            0, "Agenda Acestream",
+            s.aceUrl.ifBlank { "Sin URL. Pulsa para añadirla." },
+            null,
+            ace = true,
         ),
         MenuEntry(0, "Actualización automática", refreshLabel(s.refreshMode), Page.REFRESH),
         MenuEntry(0, "Desfase de la guía", epgShiftLabel(s.epgShiftMinutes), Page.EPG_SHIFT),
@@ -451,7 +459,7 @@ private fun SettingsMenu(
                             true
                         }
                         .then(if (pos == 0) Modifier.focusProperties { up = tabFocus[tab] } else Modifier),
-                    onClick = { if (e.page == null) onUpdate() else onOpen(i, e.page) },
+                    onClick = { if (e.ace) onAce() else if (e.page == null) onUpdate() else onOpen(i, e.page) },
                 )
             }
         }

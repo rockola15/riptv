@@ -17,6 +17,7 @@ import kotlin.concurrent.thread
 class UrlServer(
     private val port: Int = 8080,
     private val token: String = newToken(),
+    private val title: String = "URL de la lista",
     private val onUrl: (String) -> Unit,
 ) : Closeable {
     private var server: ServerSocket? = null
@@ -119,9 +120,9 @@ class UrlServer(
         <title>RipTV</title>
         <style>body{font-family:sans-serif;margin:24px}textarea{width:100%;height:140px;font-size:16px}
         button{font-size:18px;padding:10px 20px;margin-top:12px}</style></head><body>
-        <h2>RipTV · URL de la lista</h2>
-        ${if (sent) "<p><b>✓ Enviada. La tele está cargando la lista.</b></p>" else ""}
-        <form method="post"><textarea name="url" placeholder="http://…/lista.m3u"></textarea><br>
+        <h2>RipTV · $title</h2>
+        ${if (sent) "<p><b>✓ Enviada. La tele la está cargando.</b></p>" else ""}
+        <form method="post"><textarea name="url" placeholder="http://…"></textarea><br>
         <button type="submit">Enviar a la tele</button></form></body></html>
     """.trimIndent()
 

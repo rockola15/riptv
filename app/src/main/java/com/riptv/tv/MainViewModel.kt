@@ -66,7 +66,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Películas y series ----
 
-    /** Pestaña de la pantalla principal: 0 = En directo, 1 = Películas, 2 = Series. */
+    /** Pestaña de la pantalla principal: 0 = En directo, 1 = Películas, 2 = Series, 3 = Acestream. */
     var homeTab by mutableIntStateOf(0)
 
     /** Película o episodio en reproducción; null si no se está viendo ninguno. */
@@ -138,6 +138,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (id in movieInfoCache) return
             Vod.movieInfo(account, id, settings.userAgent)?.let { movieInfoCache[id] = it }
         }
+    }
+
+    // ---- Acestream (no depende de la lista) ----
+
+    var aceMatches by mutableStateOf<List<AceMatch>?>(null); private set
+    var aceError by mutableStateOf<String?>(null); private set
+    var aceDate by mutableStateOf<String?>(null)
+    var aceLoading by mutableStateOf(false); private set
+
+    fun loadAcestream() {
+        val url = settings.aceUrl
+        if (url.isBlank() || aceMatches != null || aceLoading) return
+        aceLoading = true
+        aceError = null
+        viewModelScope.launch {
+            try {
+                aceMatches = Acestream.matches(url, settings.userAgent)
+            } catch (e: Exception) {
+                aceError = e.message ?: e.toString()
+            }
+            aceLoading = false
+        }
+    }
+
+    fun retryAcestream() {
+        aceError = null
+        loadAcestream()
+    }
+
+    /** Cambia la URL de la agenda y la vuelve a descargar. Sin «http» delante se supone https. */
+    fun applyAceUrl(url: String) {
+        if (aceLoading) return
+        settings.aceUrl = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+        aceMatches = null
+        aceError = null
+        aceDate = null
+        loadAcestream()
     }
 
     /** Vuelve a pedir el catálogo (tras fallar o al cambiar de lista). */

@@ -101,9 +101,11 @@ private fun AppContent(vm: MainViewModel, onExit: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     // null = ventana cerrada; false = actualizar la lista activa; true = añadir otra lista.
     var updateDialog by remember { mutableStateOf<Boolean?>(null) }
+    // Ventana para poner la URL de la agenda de la pestaña Acestream.
+    var aceDialog by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
     // Atrás en la pantalla principal pide confirmación, para no salir de la app sin querer.
-    BackHandler(enabled = vm.playing == null && vm.playingVod == null && !showSettings && updateDialog == null) { confirmExit = true }
+    BackHandler(enabled = vm.playing == null && vm.playingVod == null && !showSettings && updateDialog == null && !aceDialog) { confirmExit = true }
     if (confirmExit) {
         ActionDialog(
             title = "¿Salir de la aplicación?",
@@ -123,10 +125,11 @@ private fun AppContent(vm: MainViewModel, onExit: () -> Unit) {
             when {
                 vm.playing != null -> PlayerScreen(vm)
                 vm.playingVod != null -> VodPlayerScreen(vm)
-                showSettings -> SettingsScreen(vm, { addNew -> updateDialog = addNew }) { showSettings = false }
-                else -> BrowseScreen(vm) { showSettings = true }
+                showSettings -> SettingsScreen(vm, { addNew -> updateDialog = addNew }, { aceDialog = true }) { showSettings = false }
+                else -> BrowseScreen(vm, onSettings = { showSettings = true }, onAce = { aceDialog = true })
             }
             updateDialog?.let { addNew -> UpdateListDialog(vm, addNew) { updateDialog = null } }
+            if (aceDialog) UpdateListDialog(vm, addNew = true, ace = true) { aceDialog = false }
         }
     }
 }
@@ -149,7 +152,7 @@ private fun CrashScreen(report: String, onContinue: () -> Unit) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun BrowseScreen(vm: MainViewModel, onSettings: () -> Unit) {
+private fun BrowseScreen(vm: MainViewModel, onSettings: () -> Unit, onAce: () -> Unit) {
     val s = vm.settings
     var menuChannel by remember { mutableStateOf<Channel?>(null) }
     var pinGroup by remember { mutableStateOf<String?>(null) }
@@ -206,6 +209,7 @@ private fun BrowseScreen(vm: MainViewModel, onSettings: () -> Unit) {
         }
         Row(Modifier.fillMaxSize().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             when {
+                vm.homeTab == 3 -> AcestreamSection(vm, onAce)
                 vm.loading -> LoadingStatus(vm.progress, Modifier.width(480.dp))
                 vm.homeTab != 0 -> VodSection(vm, series = vm.homeTab == 2)
                 vm.error != null -> Text("Error: ${vm.error}")
@@ -370,7 +374,7 @@ internal fun subscriptionWarning(info: AccountInfo?, now: Long = System.currentT
     }
 }
 
-private val homeTabs = listOf("En directo", "Películas", "Series")
+private val homeTabs = listOf("En directo", "Películas", "Series", "Acestream")
 
 /** Barra superior: las secciones de contenido, la búsqueda y, a la derecha del todo, Ajustes. */
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -403,11 +407,12 @@ private fun HomeTabs(vm: MainViewModel, onSettings: () -> Unit) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -> Unit) {
+private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, ace: Boolean = false, onDismiss: () -> Unit) {
     val current = vm.lists.firstOrNull { it.id == vm.activeListId }
     // Sin ninguna lista guardada, «actualizar» y «añadir» son lo mismo.
-    val adding = addNew || current == null
-    var text by remember { mutableStateOf("") }
+    val adding = addNew || current == null || ace
+    val busy = if (ace) vm.aceLoading else vm.loading
+    var text by remember { mutableStateOf(if (ace) vm.settings.aceUrl else "") }
     var applying by remember { mutableStateOf(false) }
     var qrAddress by remember { mutableStateOf<String?>(null) }
     var serverError by remember { mutableStateOf<String?>(null) }
@@ -417,22 +422,23 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
     LaunchedEffect(Unit) { applyFocus.requestFocus() }
 
     fun apply(url: String) {
-        if (vm.loading) return
+        // Se lee en el momento: el servidor del QR llama a esta función desde una composición antigua.
+        if (if (ace) vm.aceLoading else vm.loading) return
         val clean = url.trim()
         if (clean.isEmpty()) {
-            inputError = "Escribe la URL o la ruta de la lista"
+            inputError = if (ace) "Escribe la URL de la agenda" else "Escribe la URL o la ruta de la lista"
             return
         }
         inputError = null
         text = clean
         applying = true
-        vm.applyUrl(clean, addNew)
+        if (ace) vm.applyAceUrl(clean) else vm.applyUrl(clean, addNew)
     }
 
     // El servidor recibe en un hilo propio; la carga se lanza desde el hilo principal.
     val server = remember {
         val main = Handler(Looper.getMainLooper())
-        UrlServer { url -> main.post { apply(url) } }
+        UrlServer(title = if (ace) "URL de la agenda Acestream" else "URL de la lista") { url -> main.post { apply(url) } }
     }
     DisposableEffect(Unit) { onDispose { server.close() } }
     LaunchedEffect(Unit) {
@@ -445,11 +451,12 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
     }
 
     // Al terminar de cargar sin error, se cierra sola; con error, queda el mensaje.
-    LaunchedEffect(applying, vm.loading) {
-        if (applying && !vm.loading && vm.error == null) onDismiss()
+    val error = if (ace) vm.aceError else vm.error
+    LaunchedEffect(applying, busy) {
+        if (applying && !busy && error == null) onDismiss()
     }
 
-    Dialog(onDismissRequest = { if (!vm.loading) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             Modifier.width(820.dp).background(Color(0xFF1A1A22)).padding(28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -458,7 +465,11 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        if (adding) (if (current == null) "Añade tu lista" else "Añadir otra lista") else "Actualizar la lista",
+                        when {
+                            ace -> "Agenda de Acestream"
+                            adding -> if (current == null) "Añade tu lista" else "Añadir otra lista"
+                            else -> "Actualizar la lista"
+                        },
                         style = MaterialTheme.typography.titleLarge,
                     )
                     if (!adding) Text("Lista actual: ${current?.name}", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB0B0C0))
@@ -477,7 +488,7 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (qrAddress != null) {
                         Text("Desde el móvil", style = MaterialTheme.typography.titleMedium)
-                        Text("Escanea el QR y envía ahí la URL de la lista.", style = MaterialTheme.typography.bodyLarge)
+                        Text(if (ace) "Escanea el QR y envía ahí la URL de la página con los partidos." else "Escanea el QR y envía ahí la URL de la lista.", style = MaterialTheme.typography.bodyLarge)
                         Text("¿No puedes escanear? Abre esta dirección en el navegador:", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFB0B0C0))
                         Text(qrAddress.orEmpty(), style = MaterialTheme.typography.titleMedium)
                     } else {
@@ -488,14 +499,14 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
 
             // Opción 2: con el mando. El campo ocupa varias líneas para que se vea la URL entera.
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Con el mando: escribe o pega la URL o la ruta de la lista", style = MaterialTheme.typography.titleMedium)
+                Text(if (ace) "Con el mando: escribe o pega la URL de la agenda" else "Con el mando: escribe o pega la URL o la ruta de la lista", style = MaterialTheme.typography.titleMedium)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Box(Modifier.weight(1f).background(Color(0xFF22222A)).padding(14.dp)) {
                         if (text.isEmpty()) Text("http://…", color = Color.Gray)
                         BasicTextField(
                             value = text,
                             onValueChange = { text = it.replace("\n", "") },
-                            enabled = !vm.loading,
+                            enabled = !busy,
                             minLines = 2,
                             maxLines = 3,
                             textStyle = TextStyle(color = Color.White),
@@ -511,9 +522,9 @@ private fun UpdateListDialog(vm: MainViewModel, addNew: Boolean, onDismiss: () -
             }
 
             when {
-                vm.loading -> LoadingStatus(vm.progress)
+                busy -> if (ace) Text("Cargando partidos…") else LoadingStatus(vm.progress)
                 inputError != null -> Text(inputError.orEmpty(), color = Color(0xFFFF8A80))
-                applying && vm.error != null -> Text("Error: ${vm.error}", color = Color(0xFFFF8A80))
+                applying && error != null -> Text("Error: $error", color = Color(0xFFFF8A80))
             }
         }
     }
